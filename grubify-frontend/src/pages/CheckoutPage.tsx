@@ -28,11 +28,13 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { Cart, PlaceOrderRequest } from '../types';
 import { cartService, orderService } from '../services/api';
+import { useCart } from '../contexts/CartContext';
 
 const steps = ['Delivery Info', 'Payment', 'Review & Place Order'];
 
 const CheckoutPage: React.FC = () => {
   const navigate = useNavigate();
+  const { clear: clearCartContext } = useCart();
   const [activeStep, setActiveStep] = useState(0);
   const [cart, setCart] = useState<Cart | null>(null);
   const [loading, setLoading] = useState(true);
@@ -101,7 +103,7 @@ const CheckoutPage: React.FC = () => {
       };
 
       const order = await orderService.place(orderRequest);
-      await cartService.clear('user123');
+      await clearCartContext();
       navigate(`/order-tracking/${order.id}`);
     } catch (err: any) {
       console.error('Error placing order:', err);
