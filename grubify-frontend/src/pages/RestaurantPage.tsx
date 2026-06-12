@@ -28,11 +28,13 @@ import {
 } from '@mui/icons-material';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Restaurant, FoodItem } from '../types';
-import { restaurantService, foodItemService, cartService } from '../services/api';
+import { restaurantService, foodItemService } from '../services/api';
+import { useCart } from '../contexts/CartContext';
 
 const RestaurantPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { addItem } = useCart();
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
   const [menuItems, setMenuItems] = useState<FoodItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -77,7 +79,7 @@ const RestaurantPage: React.FC = () => {
     if (!selectedItem) return;
 
     try {
-      await cartService.addItem('user123', {
+      await addItem({
         foodItemId: selectedItem.id,
         quantity,
         specialInstructions,
@@ -193,10 +195,10 @@ const RestaurantPage: React.FC = () => {
             }}
           >
             {items.map((item) => (
-              <Card key={item.id} sx={{ display: 'flex', height: 200 }}>
+              <Card key={item.id} sx={{ display: 'flex', minHeight: 260 }}>
                 <CardMedia
                   component="img"
-                  sx={{ width: 150, objectFit: 'cover' }}
+                  sx={{ width: 150, objectFit: 'cover', alignSelf: 'stretch' }}
                   image={item.imageUrl}
                   alt={item.name}
                 />

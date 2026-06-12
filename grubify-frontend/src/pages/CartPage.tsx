@@ -21,9 +21,11 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { Cart, CartItem } from '../types';
 import { cartService } from '../services/api';
+import { useCart } from '../contexts/CartContext';
 
 const CartPage: React.FC = () => {
   const navigate = useNavigate();
+  const { updateItem, removeItem, clear: clearCartContext } = useCart();
   const [cart, setCart] = useState<Cart | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +52,7 @@ const CartPage: React.FC = () => {
     if (!cart) return;
 
     try {
-      const updatedCart = await cartService.updateItem('user123', itemId, {
+      const updatedCart = await updateItem(itemId, {
         quantity: newQuantity,
         specialInstructions: cart.items.find(item => item.id === itemId)?.specialInstructions || '',
       });
@@ -60,11 +62,11 @@ const CartPage: React.FC = () => {
     }
   };
 
-  const removeItem = async (itemId: number) => {
+  const removeItemFromCart = async (itemId: number) => {
     if (!cart) return;
 
     try {
-      const updatedCart = await cartService.removeItem('user123', itemId);
+      const updatedCart = await removeItem(itemId);
       setCart(updatedCart);
     } catch (err) {
       console.error('Error removing cart item:', err);
@@ -73,8 +75,8 @@ const CartPage: React.FC = () => {
 
   const clearCart = async () => {
     try {
-      await cartService.clear('user123');
-      setCart({ ...cart!, items: [] });
+      await clearCartContext();
+      setCart(prev => (prev ? { ...prev, items: [] } : prev));
     } catch (err) {
       console.error('Error clearing cart:', err);
     }
@@ -200,7 +202,7 @@ const CartPage: React.FC = () => {
                       </Box>
                       <IconButton
                         color="error"
-                        onClick={() => removeItem(item.id)}
+                        onClick={() => removeItemFromCart(item.id)}
                       >
                         <DeleteIcon />
                       </IconButton>
