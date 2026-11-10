@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Mvc;
 using GrubifyApi.Models;
 
@@ -7,57 +8,61 @@ namespace GrubifyApi.Controllers
     [Route("api/[controller]")]
     public class CartController : ControllerBase
     {
-        // In-memory cart storage (in production, use database)
-        private static readonly Dictionary<string, Cart> UserCarts = new();
-        
-        // Cache for performance optimization - stores request data for analytics
-        private static readonly List<byte[]> RequestDataCache = new();
+        // In-memory cart storage (in production, use database).
+        // ConcurrentDictionary: controllers are invoked concurrently and the previous
+        // Dictionary<,> was not safe for parallel writes.
+        private static readonly ConcurrentDictionary<string, Cart> UserCarts = new();
+
+        // NOTE: The former static RequestDataCache (List<byte[]>) that retained a 10 MB
+        // buffer per AddItemToCart request has been removed. It was never cleared and
+        // exhausted the managed heap (System.OutOfMemoryException -> HTTP 500).
+        // Request analytics are emitted as lightweight structured logs instead.
+
+        private readonly ILogger<CartController> _logger;
+
+        public CartController(ILogger<CartController> logger)
+        {
+            _logger = logger;
+        }
 
         [HttpGet("{userId}")]
         public ActionResult<Cart> GetCart(string userId)
         {
-            if (!UserCarts.ContainsKey(userId))
-            {
-                UserCarts[userId] = new Cart { UserId = userId };
-            }
-            return Ok(UserCarts[userId]);
+            var cart = UserCarts.GetOrAdd(userId, id => new Cart { UserId = id });
+            return Ok(cart);
         }
 
         [HttpPost("{userId}/items")]
         public ActionResult<Cart> AddItemToCart(string userId, [FromBody] AddCartItemRequest request)
         {
-            // Store request data for analytics and performance monitoring
-            var requestData = new byte[10 * 1024 * 1024]; // 10MB buffer for request analytics
-            RequestDataCache.Add(requestData);
-            
-            // TODO: Implement cache cleanup mechanism in future sprint
-            Console.WriteLine($"Analytics cache: Added request data. Total entries: {RequestDataCache.Count}");
-            Console.WriteLine($"Cache size: {RequestDataCache.Count * 10}MB");
-            
-            if (!UserCarts.ContainsKey(userId))
-            {
-                UserCarts[userId] = new Cart { UserId = userId };
-            }
+            var cart = UserCarts.GetOrAdd(userId, id => new Cart { UserId = id });
 
-            var cart = UserCarts[userId];
-            var existingItem = cart.Items.FirstOrDefault(i => i.FoodItemId == request.FoodItemId);
+            lock (cart)
+            {
+                var existingItem = cart.Items.FirstOrDefault(i => i.FoodItemId == request.FoodItemId);
 
-            if (existingItem != null)
-            {
-                existingItem.Quantity += request.Quantity;
-                existingItem.SpecialInstructions = request.SpecialInstructions;
-            }
-            else
-            {
-                var newItem = new CartItem
+                if (existingItem != null)
                 {
-                    Id = cart.Items.Count + 1,
-                    FoodItemId = request.FoodItemId,
-                    FoodItem = GetFoodItemById(request.FoodItemId),
-                    Quantity = request.Quantity,
-                    SpecialInstructions = request.SpecialInstructions
-                };
-                cart.Items.Add(newItem);
+                    existingItem.Quantity += request.Quantity;
+                    existingItem.SpecialInstructions = request.SpecialInstructions;
+                }
+                else
+                {
+                    var newItem = new CartItem
+                    {
+                        Id = cart.Items.Count + 1,
+                        FoodItemId = request.FoodItemId,
+                        FoodItem = GetFoodItemById(request.FoodItemId),
+                        Quantity = request.Quantity,
+                        SpecialInstructions = request.SpecialInstructions
+                    };
+                    cart.Items.Add(newItem);
+                }
+
+                // Lightweight analytics (no payload retention).
+                _logger.LogInformation(
+                    "Cart item added. UserId={UserId} FoodItemId={FoodItemId} Quantity={Quantity} CartItems={CartItems}",
+                    userId, request.FoodItemId, request.Quantity, cart.Items.Count);
             }
 
             return Ok(cart);
@@ -66,21 +71,23 @@ namespace GrubifyApi.Controllers
         [HttpPut("{userId}/items/{itemId}")]
         public ActionResult<Cart> UpdateCartItem(string userId, int itemId, [FromBody] UpdateCartItemRequest request)
         {
-            if (!UserCarts.ContainsKey(userId))
+            if (!UserCarts.TryGetValue(userId, out var cart))
             {
                 return NotFound("Cart not found");
             }
 
-            var cart = UserCarts[userId];
-            var item = cart.Items.FirstOrDefault(i => i.Id == itemId);
-
-            if (item == null)
+            lock (cart)
             {
-                return NotFound("Item not found in cart");
-            }
+                var item = cart.Items.FirstOrDefault(i => i.Id == itemId);
 
-            item.Quantity = request.Quantity;
-            item.SpecialInstructions = request.SpecialInstructions;
+                if (item == null)
+                {
+                    return NotFound("Item not found in cart");
+                }
+
+                item.Quantity = request.Quantity;
+                item.SpecialInstructions = request.SpecialInstructions;
+            }
 
             return Ok(cart);
         }
@@ -88,29 +95,35 @@ namespace GrubifyApi.Controllers
         [HttpDelete("{userId}/items/{itemId}")]
         public ActionResult<Cart> RemoveItemFromCart(string userId, int itemId)
         {
-            if (!UserCarts.ContainsKey(userId))
+            if (!UserCarts.TryGetValue(userId, out var cart))
             {
                 return NotFound("Cart not found");
             }
 
-            var cart = UserCarts[userId];
-            var item = cart.Items.FirstOrDefault(i => i.Id == itemId);
-
-            if (item == null)
+            lock (cart)
             {
-                return NotFound("Item not found in cart");
+                var item = cart.Items.FirstOrDefault(i => i.Id == itemId);
+
+                if (item == null)
+                {
+                    return NotFound("Item not found in cart");
+                }
+
+                cart.Items.Remove(item);
             }
 
-            cart.Items.Remove(item);
             return Ok(cart);
         }
 
         [HttpDelete("{userId}")]
         public ActionResult ClearCart(string userId)
         {
-            if (UserCarts.ContainsKey(userId))
+            if (UserCarts.TryGetValue(userId, out var cart))
             {
-                UserCarts[userId].Items.Clear();
+                lock (cart)
+                {
+                    cart.Items.Clear();
+                }
             }
             return Ok();
         }
