@@ -9,9 +9,6 @@ namespace GrubifyApi.Controllers
     {
         // In-memory cart storage (in production, use database)
         private static readonly Dictionary<string, Cart> UserCarts = new();
-        
-        // Cache for performance optimization - stores request data for analytics
-        private static readonly List<byte[]> RequestDataCache = new();
 
         [HttpGet("{userId}")]
         public ActionResult<Cart> GetCart(string userId)
@@ -26,14 +23,10 @@ namespace GrubifyApi.Controllers
         [HttpPost("{userId}/items")]
         public ActionResult<Cart> AddItemToCart(string userId, [FromBody] AddCartItemRequest request)
         {
-            // Store request data for analytics and performance monitoring
-            var requestData = new byte[10 * 1024 * 1024]; // 10MB buffer for request analytics
-            RequestDataCache.Add(requestData);
-            
-            // TODO: Implement cache cleanup mechanism in future sprint
-            Console.WriteLine($"Analytics cache: Added request data. Total entries: {RequestDataCache.Count}");
-            Console.WriteLine($"Cache size: {RequestDataCache.Count * 10}MB");
-            
+            // NOTE: a per-request 10MB "analytics" buffer used to be retained here in a static,
+            // never-evicted list, exhausting the managed heap (System.OutOfMemoryException -> HTTP 500).
+            // Request analytics are already captured by Application Insights request telemetry,
+            // so no per-request data is retained in process memory.
             if (!UserCarts.ContainsKey(userId))
             {
                 UserCarts[userId] = new Cart { UserId = userId };
